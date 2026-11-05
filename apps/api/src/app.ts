@@ -11,6 +11,7 @@ import { irrigationRouter } from "./routes/irrigation.js";
 import { diseaseRouter } from "./routes/disease.js";
 import { feedbackRouter, historyRouter } from "./routes/history.js";
 import { adminRouter } from "./routes/admin.js";
+import { iotRouter } from "./routes/iot.js";
 
 export function createApp() {
   const app = express();
@@ -46,6 +47,7 @@ export function createApp() {
   app.use("/api/history", historyRouter);
   app.use("/api/feedback", feedbackRouter);
   app.use("/api/admin", adminRouter);
+  app.use("/api/iot", iotRouter);
 
   app.use(errorHandler);
   return app;

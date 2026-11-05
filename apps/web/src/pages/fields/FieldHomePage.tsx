@@ -236,10 +236,10 @@ export function FieldHomePage() {
               </div>
               <div className="p-5 space-y-4 flex-1 flex flex-col justify-between">
                 <p className="text-sm text-forest-800 leading-relaxed">
-                  Assess current soil moisture depletion, evaluate 3-day rainfall outlooks, and calculate precise application volume (Liters) and depth (mm).
+                  Assess current soil moisture depletion, evaluate 3-day rainfall outlooks, and calculate precise irrigation volume (Liters) and water depth (mm).
                 </p>
                 <div className="pt-3 border-t border-emerald-100 flex items-center justify-between font-mono text-xs text-sky-700 font-semibold group-hover:text-sky-800">
-                  <span>Calculate Application →</span>
+                  <span>Calculate Irrigation & Water →</span>
                   <AgriIcon name="arrowRight" className="h-4 w-4 group-hover:translate-x-1 transition-transform" />
                 </div>
               </div>

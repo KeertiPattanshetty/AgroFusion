@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { URGENCY_FARMER_LABELS, type AreaUnit, type UrgencyLevel } from "@agrofusion/shared";
-import { CatalogApi, FeedbackApi, FieldsApi, type ForecastDay, IrrigationApi } from "../../lib/api";
+import { CatalogApi, FeedbackApi, FieldsApi, type ForecastDay, IrrigationApi, IotApi } from "../../lib/api";
 import { AgriIcon, Button, Card, ErrorBanner, Field, Input, Select, SkeletonCard, StatusBadge } from "../../components/ui";
 import i18n from "../../i18n";
 import { AGRI_HERO_IMAGES } from "../../lib/agronomyAssets";
@@ -33,6 +33,25 @@ export function IrrigationPage() {
   const [result, setResult] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [iotStatus, setIotStatus] = useState<{ syncing: boolean; lastSync?: Date; error?: string } | null>(null);
+  const [weatherAutoFetched, setWeatherAutoFetched] = useState(false);
+
+  async function handleSyncArduino() {
+    setIotStatus({ syncing: true });
+    try {
+      const res = await IotApi.latest();
+      if (res.available && res.telemetry) {
+        setMoisture(String(Math.round(res.telemetry.soilMoisturePct)));
+        if (res.telemetry.temperatureC != null) setTemp(String(res.telemetry.temperatureC));
+        if (res.telemetry.humidityPct != null) setHumidity(String(res.telemetry.humidityPct));
+        setIotStatus({ syncing: false, lastSync: new Date(res.telemetry.receivedAt) });
+      } else {
+        setIotStatus({ syncing: false, error: "No Arduino readings found yet. Send telemetry or run IoT bridge." });
+      }
+    } catch {
+      setIotStatus({ syncing: false, error: "Could not fetch Arduino telemetry." });
+    }
+  }
 
   const requestLocation = () => {
     if (!navigator.geolocation) {
@@ -54,19 +73,23 @@ export function IrrigationPage() {
             setHumidity(String(w.current.humidityPct));
             setForecast(w.forecast ?? null);
             setWeatherWarning(null);
+            setWeatherAutoFetched(true);
             if (w.locationName) {
               setLocality(w.locationName);
             }
           } else {
+            setWeatherAutoFetched(false);
             setWeatherWarning(w.warning || t("weatherFail"));
           }
         } catch {
+          setWeatherAutoFetched(false);
           setWeatherWarning(t("weatherFail"));
         }
       },
       (err) => {
         console.warn("Geolocation denied or error:", err);
         setLocationStatus("denied");
+        setWeatherAutoFetched(false);
         setWeatherWarning(t("weatherFail"));
       },
       { enableHighAccuracy: true, timeout: 10000 },
@@ -230,15 +253,37 @@ export function IrrigationPage() {
 
               {/* Soil Moisture with Interactive Gauge */}
               <div className="rounded-2xl bg-emerald-50/70 border border-emerald-200 p-4 space-y-2.5">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between flex-wrap gap-2">
                   <div className="font-mono text-xs font-semibold uppercase tracking-wider text-forest-950 flex items-center gap-1.5">
                     <AgriIcon name="droplet" className="h-3.5 w-3.5 text-sky-600" />
                     <span>{t("moisture")} Level (% Depletion)</span>
                   </div>
-                  <span className="font-mono text-xs font-bold text-forest-950 bg-white border border-emerald-200 px-2.5 py-0.5 rounded-lg shadow-2xs">
-                    {moistureVal}%
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleSyncArduino}
+                      disabled={iotStatus?.syncing}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono font-semibold bg-emerald-700 hover:bg-emerald-800 active:scale-95 text-white transition-all cursor-pointer shadow-xs disabled:opacity-50"
+                      title="Sync live reading from connected Arduino sensor"
+                    >
+                      <span className="h-2 w-2 rounded-full bg-emerald-300 animate-pulse" />
+                      {iotStatus?.syncing ? "Reading..." : "Sync Arduino"}
+                    </button>
+                    <span className="font-mono text-xs font-bold text-forest-950 bg-white border border-emerald-200 px-2.5 py-0.5 rounded-lg shadow-2xs">
+                      {moistureVal}%
+                    </span>
+                  </div>
                 </div>
+                {iotStatus?.lastSync && (
+                  <div className="text-[11px] text-emerald-800 font-mono flex items-center gap-1 bg-emerald-100/60 px-2 py-0.5 rounded-md border border-emerald-200">
+                    <span>✓ Live Arduino sensor synced at {iotStatus.lastSync.toLocaleTimeString()}</span>
+                  </div>
+                )}
+                {iotStatus?.error && (
+                  <div className="text-[11px] text-amber-800 font-mono bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">
+                    <span>⚠️ {iotStatus.error}</span>
+                  </div>
+                )}
 
                 <Input
                   type="number"
@@ -273,29 +318,58 @@ export function IrrigationPage() {
                 </div>
               </div>
 
-              {/* Weather Stats Inputs */}
-              <div className="grid grid-cols-2 gap-3 pt-1">
-                <Field label={t("temperature")} required hint="Ambient (°C)">
-                  <Input
-                    type="number"
-                    step="0.1"
-                    required
-                    placeholder="30"
-                    value={temp}
-                    onChange={(e) => setTemp(e.target.value)}
-                  />
-                </Field>
-                <Field label={t("humidity")} required hint="Relative (%)">
-                  <Input
-                    type="number"
-                    min={0}
-                    max={100}
-                    required
-                    placeholder="65"
-                    value={humidity}
-                    onChange={(e) => setHumidity(e.target.value)}
-                  />
-                </Field>
+              {/* Weather Stats Inputs (Auto-fetched & Locked from Weather API) */}
+              <div className="rounded-2xl bg-sky-50/70 border border-sky-200 p-4 space-y-3">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="font-mono text-xs font-semibold uppercase tracking-wider text-sky-950 flex items-center gap-1.5">
+                    <AgriIcon name="sun" className="h-3.5 w-3.5 text-amber-500" />
+                    <span>Atmospheric Telemetry</span>
+                  </div>
+                  {weatherAutoFetched ? (
+                    <span className="inline-flex items-center gap-1.5 text-[11px] font-mono font-semibold text-emerald-800 bg-white border border-emerald-300 px-2.5 py-1 rounded-lg shadow-2xs">
+                      <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                      Live Weather API (Locked)
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-mono text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md">
+                      Manual Input Mode
+                    </span>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <Field label={t("temperature")} required hint={weatherAutoFetched ? "Locked from API (°C)" : "Ambient (°C)"}>
+                    <Input
+                      type="number"
+                      step="0.1"
+                      required
+                      readOnly={weatherAutoFetched}
+                      placeholder="30"
+                      value={temp}
+                      onChange={(e) => !weatherAutoFetched && setTemp(e.target.value)}
+                      className={weatherAutoFetched ? "bg-white/80 font-mono font-bold text-forest-950 cursor-not-allowed border-sky-300 shadow-2xs" : "bg-white font-mono"}
+                    />
+                  </Field>
+                  <Field label={t("humidity")} required hint={weatherAutoFetched ? "Locked from API (%)" : "Relative (%)"}>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={100}
+                      required
+                      readOnly={weatherAutoFetched}
+                      placeholder="65"
+                      value={humidity}
+                      onChange={(e) => !weatherAutoFetched && setHumidity(e.target.value)}
+                      className={weatherAutoFetched ? "bg-white/80 font-mono font-bold text-forest-950 cursor-not-allowed border-sky-300 shadow-2xs" : "bg-white font-mono"}
+                    />
+                  </Field>
+                </div>
+
+                {weatherAutoFetched && (
+                  <p className="text-[11px] text-sky-900 font-mono flex items-center gap-1 pt-0.5">
+                    <span>🔒 Temperature & Humidity are live from OpenWeatherMap and locked to prevent tampering.</span>
+                  </p>
+                )}
               </div>
 
               {/* Plot Area & Unit */}
@@ -461,7 +535,7 @@ export function IrrigationPage() {
                 <div className="font-mono text-3xl font-black text-forest-950 mt-1">
                   {Number(result.recommended_volume_liters ?? 0).toLocaleString()} <span className="font-sans text-base font-semibold text-forest-700">Liters</span>
                 </div>
-                <div className="text-xs text-sky-800 mt-1">Total application across root-zone area</div>
+                <div className="text-xs text-sky-800 mt-1">Total water needed across root-zone area</div>
               </div>
             </div>
 

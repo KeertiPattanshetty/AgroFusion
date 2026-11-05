@@ -35,6 +35,12 @@ export class EmailService {
   async send(to: string, subject: string, text: string, html?: string) {
     const transport = getTransporter();
     if (!transport) {
+      if (env.NODE_ENV !== "production") {
+        console.log(`\n[EmailService DEV] Simulated email to: ${to}`);
+        console.log(`[EmailService DEV] Subject: ${subject}`);
+        console.log(`[EmailService DEV] Body: ${text}\n`);
+        return;
+      }
       console.error("[EmailService] SMTP configuration is missing in environment variables.");
       throw new AppError(500, "EMAIL_SEND_FAILED", "We couldn't send the verification code. Please try again later.");
     }

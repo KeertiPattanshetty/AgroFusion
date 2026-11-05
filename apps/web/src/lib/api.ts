@@ -158,3 +158,19 @@ export const AdminApi = {
   knowledge: () => api<unknown[]>("/api/admin/knowledge"),
   createKnowledge: (body: object) => api("/api/admin/knowledge", { method: "POST", body: JSON.stringify(body) }),
 };
+
+export interface IotReading {
+  soilMoisturePct: number;
+  temperatureC?: number;
+  humidityPct?: number;
+  rawAnalogValue?: number;
+  deviceId?: string;
+  receivedAt: string;
+}
+
+export const IotApi = {
+  latest: () =>
+    api<{ available: boolean; isOnline: boolean; telemetry: IotReading | null }>("/api/iot/latest"),
+  push: (data: { soilMoisturePct: number; temperatureC?: number; humidityPct?: number; rawAnalogValue?: number; deviceId?: string }) =>
+    api("/api/iot/telemetry", { method: "POST", body: JSON.stringify(data) }),
+};

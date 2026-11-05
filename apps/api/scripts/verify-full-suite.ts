@@ -455,7 +455,7 @@ async function verifyAll() {
 
     const formInvalid = new FormData();
     formInvalid.append("cropCycleId", cottonCycleId);
-    formInvalid.append("image", new Blob([nonPlantBuf], { type: "image/jpeg" }), "non_plant.jpg");
+    formInvalid.append("image", new Blob([new Uint8Array(nonPlantBuf)], { type: "image/jpeg" }), "non_plant.jpg");
 
     const scanInvalidRes = await fetch(`${API}/disease/scan`, {
       method: "POST",
@@ -492,7 +492,7 @@ async function verifyAll() {
 
     const formDark = new FormData();
     formDark.append("cropCycleId", cottonCycleId);
-    formDark.append("image", new Blob([darkBuf], { type: "image/jpeg" }), "dark.jpg");
+    formDark.append("image", new Blob([new Uint8Array(darkBuf)], { type: "image/jpeg" }), "dark.jpg");
 
     const scanDarkRes = await fetch(`${API}/disease/scan`, {
       method: "POST",

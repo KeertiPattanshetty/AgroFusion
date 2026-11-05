@@ -73,6 +73,96 @@ const DISEASE_RESPONSE_SCHEMA = {
   required: ["status", "confidence"],
 };
 
+async function enrichRawDisease(raw: unknown, cropName: string): Promise<unknown> {
+  if (!raw || typeof raw !== "object") return raw;
+  const obj = { ...(raw as Record<string, unknown>) };
+
+  if (obj.status !== "VALID_ASSESSMENT" || obj.is_healthy === true) {
+    return obj;
+  }
+
+  const effectiveCrop =
+    (typeof obj.identified_crop === "string" && obj.identified_crop.trim()) || cropName;
+
+  // 1. If disease_common_name is missing, try extraction from message
+  if (
+    (!obj.disease_common_name ||
+      typeof obj.disease_common_name !== "string" ||
+      !obj.disease_common_name.trim()) &&
+    typeof obj.message === "string"
+  ) {
+    const match = obj.message.match(
+      /Symptoms consistent with\s+([^(.]+?)(?:\s*\(([^)]+)\))?\s+detected/i,
+    );
+    if (match) {
+      obj.disease_common_name = match[1].trim();
+      if (!obj.disease_scientific_name && match[2]) {
+        obj.disease_scientific_name = match[2].trim();
+      }
+    } else {
+      const simpleMatch = obj.message.match(
+        /([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\s+(?:Rust|Blight|Spot|Rot|Mildew|Mosaic|Curl|Wilt|Canker|Blast))/i,
+      );
+      if (simpleMatch) {
+        obj.disease_common_name = simpleMatch[1].trim();
+      }
+    }
+  }
+
+  const diseaseName =
+    (typeof obj.disease_common_name === "string" && obj.disease_common_name.trim()) ||
+    "Foliar Pathological Condition";
+
+  // Look up knowledge base for grounded details
+  const match = await knowledgeRetrieval.findTreatment(diseaseName, effectiveCrop);
+  const sciMatch =
+    typeof obj.disease_scientific_name === "string" && obj.disease_scientific_name.trim()
+      ? await knowledgeRetrieval.findTreatment(obj.disease_scientific_name, effectiveCrop)
+      : null;
+  const kbEntry = match ?? sciMatch;
+
+  // 2. Probable cause enrichment
+  if (
+    !obj.probable_cause ||
+    (typeof obj.probable_cause === "string" && !obj.probable_cause.trim())
+  ) {
+    obj.probable_cause =
+      kbEntry?.probableCause?.trim() ||
+      `Pathogen infection favored by humidity, leaf wetness, and warm microclimate affecting ${effectiveCrop} foliage.`;
+  }
+
+  // 3. Consequences if untreated enrichment
+  if (
+    !obj.consequences_if_untreated ||
+    (typeof obj.consequences_if_untreated === "string" && !obj.consequences_if_untreated.trim())
+  ) {
+    obj.consequences_if_untreated =
+      kbEntry?.consequencesIfUntreated?.trim() ||
+      `Progressive foliar damage leading to premature leaf drop, impaired photosynthesis, and significant yield loss in ${effectiveCrop} if left unmanaged.`;
+  }
+
+  // 4. Treatment enrichment if missing from model but present in KB
+  if (!obj.treatment && kbEntry?.medicineName && kbEntry?.dosage) {
+    obj.treatment = {
+      medicine_name: kbEntry.medicineName,
+      dosage: kbEntry.dosage,
+      application_method: kbEntry.applicationMethod || "Foliar spray with uniform coverage",
+      timing_frequency: kbEntry.timingFrequency || "At first symptom appearance",
+    };
+    obj.treatment_available = true;
+  }
+
+  // 5. Precautions enrichment
+  if (
+    (!obj.precautions || !Array.isArray(obj.precautions) || obj.precautions.length === 0) &&
+    Array.isArray(kbEntry?.precautionsJson)
+  ) {
+    obj.precautions = kbEntry.precautionsJson;
+  }
+
+  return obj;
+}
+
 export class VisionLLMDiseaseService implements DiseaseAssessmentService {
   async assess(input: Parameters<DiseaseAssessmentService["assess"]>[0]): Promise<DiseaseAssessment> {
     const kb = await knowledgeRetrieval.forDisease(input.cropName);
@@ -88,7 +178,10 @@ export class VisionLLMDiseaseService implements DiseaseAssessmentService {
       kbPromptSection,
       "Analyze the attached plant leaf/crop image. Diagnose any pathology or health state with high diagnostic precision.",
       "If the plant in the photo differs from the registered field crop, set crop_match: false, populate identified_crop, and provide full disease diagnosis for the observed plant.",
-      "Return JSON matching the schema.",
+      "CRITICAL REQUIREMENTS FOR ACCURATE ASSESSMENT:",
+      "- If disease or foliar damage is present: You MUST populate disease_common_name, disease_scientific_name, probable_cause, consequences_if_untreated, risk_level, visible_symptoms, precautions, and treatment (with medicine_name and dosage).",
+      "- If plant is healthy: Set is_healthy: true, disease_common_name: null, and treatment: null.",
+      "Return valid JSON matching the schema.",
     ].join("\n\n");
 
     const run = async () =>
@@ -103,9 +196,11 @@ export class VisionLLMDiseaseService implements DiseaseAssessmentService {
     const started = Date.now();
     try {
       let raw = await run();
+      raw = await enrichRawDisease(raw, input.cropName);
       let validated = await validateDiseaseLlmJson(raw, input.cropName);
       if (!validated.ok) {
         raw = await run();
+        raw = await enrichRawDisease(raw, input.cropName);
         validated = await validateDiseaseLlmJson(raw, input.cropName);
       }
       const latencyMs = Date.now() - started;

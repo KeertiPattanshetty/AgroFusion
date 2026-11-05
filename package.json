@@ -8,7 +8,7 @@
     "packages/shared"
   ],
   "scripts": {
-    "dev": "npm run dev --workspaces --if-present",
+    "dev": "npm run dev --workspaces --parallel --if-present",
     "dev:api": "npm run dev -w @agrofusion/api",
     "dev:web": "npm run dev -w @agrofusion/web",
     "build": "npm run build -w @agrofusion/shared && npm run build -w @agrofusion/api && npm run build -w @agrofusion/web",
@@ -21,7 +21,9 @@
     "db:seed": "npm run seed -w @agrofusion/api",
     "seed:admin": "npm run seed:admin -w @agrofusion/api",
     "seed:admin:reset": "npm run seed:admin:reset -w @agrofusion/api",
-    "db:reset": "npm run db:reset -w @agrofusion/api"
+    "db:reset": "npm run db:reset -w @agrofusion/api",
+    "iot:simulate": "tsx apps/api/scripts/simulate-arduino.ts",
+    "iot:bridge": "powershell -ExecutionPolicy Bypass -File apps/api/scripts/iot-bridge.ps1"
   },
   "engines": {
     "node": ">=20"
