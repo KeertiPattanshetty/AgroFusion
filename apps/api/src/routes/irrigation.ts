@@ -14,6 +14,19 @@ export const irrigationRouter = Router();
 irrigationRouter.use(requireAuth);
 
 irrigationRouter.get(
+  "/search-location",
+  asyncHandler(async (req, res) => {
+    const q = String(req.query.q || "").trim();
+    if (!q) {
+      res.json(ok([]));
+      return;
+    }
+    const results = await weatherService.directGeocode(q);
+    res.json(ok(results));
+  }),
+);
+
+irrigationRouter.get(
   "/weather",
   asyncHandler(async (req, res) => {
     const lat = Number(req.query.lat);

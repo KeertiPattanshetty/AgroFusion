@@ -43,6 +43,32 @@ export class WeatherService {
     return null;
   }
 
+  async directGeocode(query: string): Promise<Array<{ name: string; state?: string; country: string; lat: number; lon: number; displayName: string }>> {
+    if (!env.WEATHER_API_KEY || !query.trim()) return [];
+    try {
+      const geoUrl = `http://api.openweathermap.org/geo/1.0/direct?q=${encodeURIComponent(query.trim())}&limit=5&appid=${env.WEATHER_API_KEY}`;
+      const res = await fetch(geoUrl);
+      if (!res.ok) return [];
+      const list = (await res.json()) as Array<{ name: string; state?: string; country?: string; lat: number; lon: number }>;
+      if (!Array.isArray(list)) return [];
+      return list.map((item) => {
+        const country = item.country === "IN" ? "India" : (item.country ?? "");
+        const displayName = [item.name, item.state, country].filter(Boolean).join(", ");
+        return {
+          name: item.name,
+          state: item.state,
+          country,
+          lat: item.lat,
+          lon: item.lon,
+          displayName,
+        };
+      });
+    } catch (err) {
+      console.warn("direct geocode failed", err);
+      return [];
+    }
+  }
+
   async fetch(lat: number, lon: number): Promise<WeatherBundle | null> {
     if (!env.WEATHER_API_KEY) return null;
     try {

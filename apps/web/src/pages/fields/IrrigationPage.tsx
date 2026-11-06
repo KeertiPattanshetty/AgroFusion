@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { URGENCY_FARMER_LABELS, type AreaUnit, type UrgencyLevel } from "@agrofusion/shared";
-import { CatalogApi, FeedbackApi, FieldsApi, type ForecastDay, IrrigationApi, IotApi } from "../../lib/api";
+import { CatalogApi, FeedbackApi, FieldsApi, type ForecastDay, IrrigationApi, IotApi, type LocationSearchResult } from "../../lib/api";
 import { AgriIcon, Button, Card, ErrorBanner, Field, Input, Select, SkeletonCard, StatusBadge } from "../../components/ui";
 import i18n from "../../i18n";
 import { AGRI_HERO_IMAGES } from "../../lib/agronomyAssets";
@@ -36,6 +36,13 @@ export function IrrigationPage() {
   const [iotStatus, setIotStatus] = useState<{ syncing: boolean; lastSync?: Date; error?: string } | null>(null);
   const [weatherAutoFetched, setWeatherAutoFetched] = useState(false);
 
+  // Manual override and search states
+  const [manualWeatherOverride, setManualWeatherOverride] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<LocationSearchResult[]>([]);
+  const [searchingLocation, setSearchingLocation] = useState(false);
+  const [savedLocationMsg, setSavedLocationMsg] = useState<string | null>(null);
+
   async function handleSyncArduino() {
     setIotStatus({ syncing: true });
     try {
@@ -53,6 +60,33 @@ export function IrrigationPage() {
     }
   }
 
+  const fetchWeatherForCoords = async (lat: number, lon: number, customLocality?: string) => {
+    setCoords({ lat, lon });
+    setLocationStatus("available");
+    if (customLocality) {
+      setLocality(customLocality);
+    }
+    try {
+      const w = await IrrigationApi.weather(lat, lon);
+      if (w.available && w.current) {
+        setTemp(String(w.current.temperatureC));
+        setHumidity(String(w.current.humidityPct));
+        setForecast(w.forecast ?? null);
+        setWeatherWarning(null);
+        setWeatherAutoFetched(true);
+        if (!customLocality && w.locationName) {
+          setLocality(w.locationName);
+        }
+      } else {
+        setWeatherAutoFetched(false);
+        setWeatherWarning(w.warning || t("weatherFail"));
+      }
+    } catch {
+      setWeatherAutoFetched(false);
+      setWeatherWarning(t("weatherFail"));
+    }
+  };
+
   const requestLocation = () => {
     if (!navigator.geolocation) {
       setLocationStatus("denied");
@@ -61,30 +95,8 @@ export function IrrigationPage() {
     }
     setLocationStatus("requesting");
     navigator.geolocation.getCurrentPosition(
-      async (pos) => {
-        const lat = pos.coords.latitude;
-        const lon = pos.coords.longitude;
-        setCoords({ lat, lon });
-        setLocationStatus("available");
-        try {
-          const w = await IrrigationApi.weather(lat, lon);
-          if (w.available && w.current) {
-            setTemp(String(w.current.temperatureC));
-            setHumidity(String(w.current.humidityPct));
-            setForecast(w.forecast ?? null);
-            setWeatherWarning(null);
-            setWeatherAutoFetched(true);
-            if (w.locationName) {
-              setLocality(w.locationName);
-            }
-          } else {
-            setWeatherAutoFetched(false);
-            setWeatherWarning(w.warning || t("weatherFail"));
-          }
-        } catch {
-          setWeatherAutoFetched(false);
-          setWeatherWarning(t("weatherFail"));
-        }
+      (pos) => {
+        void fetchWeatherForCoords(pos.coords.latitude, pos.coords.longitude);
       },
       (err) => {
         console.warn("Geolocation denied or error:", err);
@@ -97,8 +109,54 @@ export function IrrigationPage() {
   };
 
   useEffect(() => {
-    requestLocation();
-  }, [t]);
+    if (fieldQ.data?.latitude != null && fieldQ.data?.longitude != null) {
+      void fetchWeatherForCoords(fieldQ.data.latitude, fieldQ.data.longitude);
+    } else {
+      requestLocation();
+    }
+  }, [fieldQ.data?.latitude, fieldQ.data?.longitude]);
+
+  const handleSearchLocation = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const query = searchQuery.trim();
+    if (!query) return;
+    setSearchingLocation(true);
+    setSearchResults([]);
+    setWeatherWarning(null);
+    try {
+      const list = await IrrigationApi.searchLocation(query);
+      if (list && list.length > 0) {
+        setSearchResults(list);
+        if (list.length === 1) {
+          selectSearchResult(list[0]);
+        }
+      } else {
+        setWeatherWarning(`No matching locations found for "${query}". Try typing a major city or district name.`);
+      }
+    } catch {
+      setWeatherWarning("Location search failed. Please check your connection.");
+    } finally {
+      setSearchingLocation(false);
+    }
+  };
+
+  const selectSearchResult = (item: LocationSearchResult) => {
+    setSearchResults([]);
+    setSearchQuery("");
+    void fetchWeatherForCoords(item.lat, item.lon, item.displayName);
+  };
+
+  const saveLocationToField = async () => {
+    if (!id || !coords) return;
+    try {
+      await FieldsApi.updateLocation(id, { latitude: coords.lat, longitude: coords.lon });
+      setSavedLocationMsg("✓ Saved as permanent default location for this field!");
+      setTimeout(() => setSavedLocationMsg(null), 4000);
+      void fieldQ.refetch();
+    } catch {
+      // ignore
+    }
+  };
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -319,55 +377,72 @@ export function IrrigationPage() {
               </div>
 
               {/* Weather Stats Inputs (Auto-fetched & Locked from Weather API) */}
+              {/* Atmospheric Telemetry */}
               <div className="rounded-2xl bg-sky-50/70 border border-sky-200 p-4 space-y-3">
                 <div className="flex items-center justify-between flex-wrap gap-2">
                   <div className="font-mono text-xs font-semibold uppercase tracking-wider text-sky-950 flex items-center gap-1.5">
                     <AgriIcon name="sun" className="h-3.5 w-3.5 text-amber-500" />
                     <span>Atmospheric Telemetry</span>
                   </div>
-                  {weatherAutoFetched ? (
-                    <span className="inline-flex items-center gap-1.5 text-[11px] font-mono font-semibold text-emerald-800 bg-white border border-emerald-300 px-2.5 py-1 rounded-lg shadow-2xs">
-                      <span className="h-2 w-2 rounded-full bg-emerald-500" />
-                      Live Weather API (Locked)
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1 text-[11px] font-mono text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md">
-                      Manual Input Mode
-                    </span>
-                  )}
+                  <div className="flex items-center gap-2">
+                    {weatherAutoFetched && (
+                      <button
+                        type="button"
+                        onClick={() => setManualWeatherOverride(!manualWeatherOverride)}
+                        className="text-[11px] font-mono px-2 py-0.5 rounded-md border border-sky-300 bg-white hover:bg-sky-50 transition-colors cursor-pointer text-sky-900 shadow-2xs font-medium"
+                      >
+                        {manualWeatherOverride ? "🔒 Relock to API" : "✏️ Edit manually"}
+                      </button>
+                    )}
+                    {weatherAutoFetched && !manualWeatherOverride ? (
+                      <span className="inline-flex items-center gap-1.5 text-[11px] font-mono font-semibold text-emerald-800 bg-white border border-emerald-300 px-2.5 py-1 rounded-lg shadow-2xs">
+                        <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                        Live Weather API (Locked)
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 text-[11px] font-mono text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md">
+                        Manual Override Mode
+                      </span>
+                    )}
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
-                  <Field label={t("temperature")} required hint={weatherAutoFetched ? "Locked from API (°C)" : "Ambient (°C)"}>
+                  <Field label={t("temperature")} required hint={weatherAutoFetched && !manualWeatherOverride ? "Locked from API (°C)" : "Ambient (°C)"}>
                     <Input
                       type="number"
                       step="0.1"
                       required
-                      readOnly={weatherAutoFetched}
+                      readOnly={weatherAutoFetched && !manualWeatherOverride}
                       placeholder="30"
                       value={temp}
-                      onChange={(e) => !weatherAutoFetched && setTemp(e.target.value)}
-                      className={weatherAutoFetched ? "bg-white/80 font-mono font-bold text-forest-950 cursor-not-allowed border-sky-300 shadow-2xs" : "bg-white font-mono"}
+                      onChange={(e) => (!weatherAutoFetched || manualWeatherOverride) && setTemp(e.target.value)}
+                      className={weatherAutoFetched && !manualWeatherOverride ? "bg-white/80 font-mono font-bold text-forest-950 cursor-not-allowed border-sky-300 shadow-2xs" : "bg-white font-mono font-semibold text-forest-950"}
                     />
                   </Field>
-                  <Field label={t("humidity")} required hint={weatherAutoFetched ? "Locked from API (%)" : "Relative (%)"}>
+                  <Field label={t("humidity")} required hint={weatherAutoFetched && !manualWeatherOverride ? "Locked from API (%)" : "Relative (%)"}>
                     <Input
                       type="number"
                       min={0}
                       max={100}
                       required
-                      readOnly={weatherAutoFetched}
+                      readOnly={weatherAutoFetched && !manualWeatherOverride}
                       placeholder="65"
                       value={humidity}
-                      onChange={(e) => !weatherAutoFetched && setHumidity(e.target.value)}
-                      className={weatherAutoFetched ? "bg-white/80 font-mono font-bold text-forest-950 cursor-not-allowed border-sky-300 shadow-2xs" : "bg-white font-mono"}
+                      onChange={(e) => (!weatherAutoFetched || manualWeatherOverride) && setHumidity(e.target.value)}
+                      className={weatherAutoFetched && !manualWeatherOverride ? "bg-white/80 font-mono font-bold text-forest-950 cursor-not-allowed border-sky-300 shadow-2xs" : "bg-white font-mono font-semibold text-forest-950"}
                     />
                   </Field>
                 </div>
 
-                {weatherAutoFetched && (
+                {weatherAutoFetched && !manualWeatherOverride && (
                   <p className="text-[11px] text-sky-900 font-mono flex items-center gap-1 pt-0.5">
-                    <span>🔒 Temperature & Humidity are live from OpenWeatherMap and locked to prevent tampering.</span>
+                    <span>🔒 Temperature & Humidity are live from OpenWeatherMap. Click "Edit manually" if you want to override.</span>
+                  </p>
+                )}
+                {manualWeatherOverride && (
+                  <p className="text-[11px] text-amber-900 font-mono flex items-center gap-1 pt-0.5">
+                    <span>✏️ Manual override active. You can type field-measured temperature & humidity directly.</span>
                   </p>
                 )}
               </div>
@@ -406,7 +481,7 @@ export function IrrigationPage() {
 
         {/* Right Column: Local Microclimate & 3-Day Forecast */}
         <div className="lg:col-span-5 space-y-4">
-          <div className="rounded-3xl border border-emerald-200 bg-white shadow-sm p-5 space-y-3">
+          <div className="rounded-3xl border border-emerald-200 bg-white shadow-sm p-5 space-y-3.5">
             <div className="flex items-center justify-between pb-3 border-b border-emerald-100">
               <div>
                 <h3 className="text-sm font-bold text-forest-950 flex items-center gap-1.5">
@@ -426,24 +501,111 @@ export function IrrigationPage() {
               </Button>
             </div>
 
+            {/* City / District Search Input */}
+            <form onSubmit={handleSearchLocation} className="space-y-2">
+              <div className="flex gap-2">
+                <Input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Type city/district (e.g. Belagavi, Pune, Bagalkot)..."
+                  className="bg-white text-xs h-9"
+                />
+                <Button
+                  type="submit"
+                  size="sm"
+                  variant="primary"
+                  loading={searchingLocation}
+                  disabled={searchingLocation || !searchQuery.trim()}
+                  className="w-auto px-3 shrink-0 text-xs h-9 cursor-pointer"
+                >
+                  Search
+                </Button>
+              </div>
+
+              {/* Suggestions / Results */}
+              {searchResults.length > 0 && (
+                <div className="border border-emerald-200 bg-white rounded-xl p-2 space-y-1 shadow-sm max-h-48 overflow-y-auto">
+                  <div className="text-[10px] font-mono uppercase tracking-wider text-forest-600 px-1 font-semibold">
+                    Matching Locations:
+                  </div>
+                  {searchResults.map((item, idx) => (
+                    <button
+                      key={idx}
+                      type="button"
+                      onClick={() => selectSearchResult(item)}
+                      className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-emerald-50 text-xs font-medium text-forest-950 flex items-center justify-between transition-colors cursor-pointer group"
+                    >
+                      <span className="group-hover:text-emerald-800">📍 {item.displayName}</span>
+                      <span className="text-[10px] font-mono text-stone-400">
+                        {item.lat.toFixed(2)}, {item.lon.toFixed(2)}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </form>
+
+            {/* Quick Regional Suggestions */}
+            <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+              <span className="text-[11px] font-mono text-forest-600">Quick set:</span>
+              {["Belagavi", "Bagalkot", "Dharwad", "Pune", "Nashik", "Solapur"].map((city) => (
+                <button
+                  key={city}
+                  type="button"
+                  onClick={() => {
+                    setSearchQuery(city);
+                    void IrrigationApi.searchLocation(city).then((res) => {
+                      if (res && res[0]) selectSearchResult(res[0]);
+                    });
+                  }}
+                  className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-stone-100 hover:bg-emerald-100 hover:text-emerald-900 border border-stone-200 text-stone-700 transition-colors cursor-pointer"
+                >
+                  {city}
+                </button>
+              ))}
+            </div>
+
             {locationStatus === "requesting" && (
-              <div className="mt-3 flex items-center gap-2 text-xs text-forest-700 py-2">
+              <div className="mt-2 flex items-center gap-2 text-xs text-forest-700 py-2">
                 <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-emerald-600 border-t-transparent" />
                 <span>{t("detectingLocation")}</span>
               </div>
             )}
 
             {locationStatus === "available" && coords && (
-              <div className="mt-3 space-y-2 text-xs">
+              <div className="mt-2 space-y-2 text-xs">
                 {locality && (
-                  <div className="font-bold text-forest-950 text-sm bg-emerald-50/70 p-2.5 rounded-xl border border-emerald-150">
-                    📍 {locality}
+                  <div className="font-bold text-forest-950 text-sm bg-emerald-50/70 p-2.5 rounded-xl border border-emerald-150 flex items-center justify-between gap-2">
+                    <span className="truncate">📍 {locality}</span>
+                    {fieldQ.data?.id && (
+                      <button
+                        type="button"
+                        onClick={saveLocationToField}
+                        title="Save this location as the permanent default for this field"
+                        className="text-[11px] font-mono font-semibold text-emerald-800 bg-white hover:bg-emerald-100 border border-emerald-300 px-2 py-1 rounded-md cursor-pointer transition-colors shadow-2xs shrink-0"
+                      >
+                        💾 Save to Field
+                      </button>
+                    )}
                   </div>
                 )}
-                <div className="text-forest-700 flex items-center gap-2">
-                  <span>Lat: <strong className="font-mono text-forest-950">{coords.lat.toFixed(4)}</strong></span>
-                  <span className="text-emerald-300">|</span>
-                  <span>Lon: <strong className="font-mono text-forest-950">{coords.lon.toFixed(4)}</strong></span>
+                {savedLocationMsg && (
+                  <div className="text-[11px] text-emerald-800 font-mono bg-emerald-100/80 px-2.5 py-1 rounded-md border border-emerald-300 animate-fade-in">
+                    {savedLocationMsg}
+                  </div>
+                )}
+                <div className="text-forest-700 flex items-center justify-between text-[11px] px-1">
+                  <div>
+                    <span>Lat: <strong className="font-mono text-forest-950">{coords.lat.toFixed(4)}</strong></span>
+                    <span className="text-emerald-300 mx-1.5">|</span>
+                    <span>Lon: <strong className="font-mono text-forest-950">{coords.lon.toFixed(4)}</strong></span>
+                  </div>
+                  {fieldQ.data?.latitude != null && (
+                    <span className="text-[10px] font-mono text-emerald-700 font-medium">
+                      ✓ Saved to field profile
+                    </span>
+                  )}
                 </div>
               </div>
             )}
@@ -451,7 +613,7 @@ export function IrrigationPage() {
             {locationStatus === "denied" && (
               <div className="mt-3 rounded-xl bg-amber-50 p-3 text-xs text-amber-900 border border-amber-200">
                 <p className="font-semibold">{t("locationDenied")}</p>
-                <p className="mt-0.5 text-stone-600">Manual weather values entered on the left will be utilized.</p>
+                <p className="mt-0.5 text-stone-600">You can search for your city above or enter manual values on the left.</p>
               </div>
             )}
           </div>

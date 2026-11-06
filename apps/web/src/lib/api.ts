@@ -85,12 +85,23 @@ export type ForecastDay = {
   tempMinC: number;
 };
 
+export type LocationSearchResult = {
+  name: string;
+  state?: string;
+  country: string;
+  lat: number;
+  lon: number;
+  displayName: string;
+};
+
 export const FieldsApi = {
   list: () => api<FieldCard[]>("/api/fields"),
   get: (id: string) => api<FieldDetail>(`/api/fields/${id}`),
   create: (body: object) => api("/api/fields", { method: "POST", body: JSON.stringify(body) }),
   newCycle: (id: string, body: object) => api(`/api/fields/${id}/new-crop-cycle`, { method: "POST", body: JSON.stringify(body) }),
   archive: (id: string) => api(`/api/fields/${id}/archive`, { method: "PATCH" }),
+  updateLocation: (id: string, coords: { latitude: number; longitude: number }) =>
+    api<{ success: boolean }>(`/api/fields/${id}/location`, { method: "PATCH", body: JSON.stringify(coords) }),
 };
 
 export type CropCycle = {
@@ -106,6 +117,8 @@ export type FieldCard = {
   id: string;
   name: string;
   advisoryBadge: string;
+  latitude?: number | null;
+  longitude?: number | null;
   activeCycle?: CropCycle | null;
   cropCycles: CropCycle[];
 };
@@ -125,6 +138,8 @@ export const IrrigationApi = {
       locationName?: string;
       warning?: string;
     }>(`/api/irrigation/weather?lat=${lat}&lon=${lon}`),
+  searchLocation: (q: string) =>
+    api<LocationSearchResult[]>(`/api/irrigation/search-location?q=${encodeURIComponent(q)}`),
   recommend: (body: object) => api<Record<string, unknown>>("/api/irrigation/recommend", { method: "POST", body: JSON.stringify(body) }),
 };
 

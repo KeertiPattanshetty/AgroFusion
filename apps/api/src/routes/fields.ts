@@ -56,6 +56,24 @@ fieldsRouter.patch(
   }),
 );
 
+fieldsRouter.patch(
+  "/:id/location",
+  asyncHandler(async (req, res) => {
+    const body = z
+      .object({
+        latitude: z.number(),
+        longitude: z.number(),
+      })
+      .parse(req.body);
+    const id = param(req, "id");
+    await prisma.field.updateMany({
+      where: { id, userId: (req as AuthedRequest).user.id },
+      data: { latitude: body.latitude, longitude: body.longitude },
+    });
+    res.json(ok({ success: true }));
+  }),
+);
+
 export const cropCyclesRouter = Router();
 cropCyclesRouter.use(requireAuth);
 
